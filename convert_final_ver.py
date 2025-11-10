@@ -465,36 +465,55 @@ class N8NWorkflowProcessor:
                 try:
                     validation_result = self.validator.validate_and_fix(workflow_data)
                     
-                    # Handle different return value formats
+                    # validate_and_fix returns (fixed_workflow: Dict, warnings: List[str])
                     if isinstance(validation_result, tuple):
-                        if len(validation_result) == 3:
+                        if len(validation_result) == 2:
+                            # Correct format: (fixed_workflow, warnings)
+                            fixed_workflow, warnings = validation_result
+                            
+                            # Verify that fixed_workflow is a dictionary
+                            if not isinstance(fixed_workflow, dict):
+                                st.warning(f"⚠️ Validation returned invalid type, using original workflow")
+                                fixed_workflow = workflow_data
+                                warnings = []
+                        elif len(validation_result) == 3:
+                            # Alternative format: (is_valid, messages, fixed_workflow)
                             is_valid, messages, fixed_workflow = validation_result
-                        elif len(validation_result) == 2:
-                            # Could be (is_valid, workflow) or (messages, workflow)
-                            if isinstance(validation_result[0], bool):
-                                is_valid, fixed_workflow = validation_result
-                                messages = []
-                            else:
-                                messages, fixed_workflow = validation_result
-                                is_valid = True
+                            warnings = messages if isinstance(messages, list) else []
                         else:
                             st.warning(f"⚠️ Unexpected validation format, using original workflow")
                             fixed_workflow = workflow_data
-                            messages = []
+                            warnings = []
                     else:
-                        # Single return value
+                        # Single return value - should be the workflow dict
                         fixed_workflow = validation_result
-                        messages = []
+                        warnings = []
                     
-                    if messages:
-                        for msg in messages:
+                    # Ensure fixed_workflow is a dictionary before using it
+                    if not isinstance(fixed_workflow, dict):
+                        st.warning(f"⚠️ Validation result is not a dictionary, using original workflow")
+                        fixed_workflow = workflow_data
+                        warnings = []
+                    
+                    if warnings:
+                        for msg in warnings:
                             st.info(f"🔧 Auto-fix: {msg}")
                     workflow_data = fixed_workflow
                     
                 except Exception as e:
                     st.warning(f"⚠️ Validation skipped: {e}")
 
+            # Ensure workflow_data is a dictionary before proceeding
+            if not isinstance(workflow_data, dict):
+                st.error(f"❌ Invalid workflow format: expected dictionary, got {type(workflow_data).__name__}")
+                return None
+
             converted_workflow = copy.deepcopy(workflow_data)
+            
+            # Verify converted_workflow is still a dictionary after deepcopy
+            if not isinstance(converted_workflow, dict):
+                st.error(f"❌ Failed to copy workflow: result is not a dictionary")
+                return None
 
             # Get layout configuration
             if CONFIG_AVAILABLE and self.config:
@@ -507,14 +526,24 @@ class N8NWorkflowProcessor:
 
             # Extract X coordinates
             x_coordinates = []
-            for node in converted_workflow.get('nodes', []):
-                if 'position' in node and len(node['position']) >= 2:
+            # Defensive check: ensure nodes exists and is a list
+            nodes = converted_workflow.get('nodes', [])
+            if not isinstance(nodes, list):
+                st.error(f"❌ Invalid workflow structure: 'nodes' must be a list, got {type(nodes).__name__}")
+                return None
+            
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue  # Skip invalid nodes
+                if 'position' in node and isinstance(node['position'], list) and len(node['position']) >= 2:
                     x_coordinates.append(node['position'][0])
 
                     if self.is_sticky_note(node):
-                        width = node.get('parameters', {}).get('width', default_sticky_width)
-                        if width:
-                            x_coordinates.append(node['position'][0] + width)
+                        node_params = node.get('parameters', {})
+                        if isinstance(node_params, dict):
+                            width = node_params.get('width', default_sticky_width)
+                            if width:
+                                x_coordinates.append(node['position'][0] + width)
 
             if not x_coordinates:
                 st.warning("⚠️ No node positions found in workflow")
@@ -530,13 +559,20 @@ class N8NWorkflowProcessor:
             regular_nodes = 0
             sticky_notes = 0
 
-            for node in converted_workflow.get('nodes', []):
-                if 'position' in node and len(node['position']) >= 2:
+            # Use the nodes list we already validated
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue  # Skip invalid nodes
+                if 'position' in node and isinstance(node['position'], list) and len(node['position']) >= 2:
                     original_x, y = node['position'][0], node['position'][1]
 
                     if self.is_sticky_note(node):
                         sticky_notes += 1
-                        width = node.get('parameters', {}).get('width', default_sticky_width)
+                        node_params = node.get('parameters', {})
+                        if isinstance(node_params, dict):
+                            width = node_params.get('width', default_sticky_width)
+                        else:
+                            width = default_sticky_width
                         new_x = canvas_width - original_x - width
                     else:
                         regular_nodes += 1
