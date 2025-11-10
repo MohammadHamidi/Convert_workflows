@@ -130,6 +130,27 @@
       "input_cost": 0.0000375,
       "output_cost": 0.00015,
       "context_window": 1000000
+    },
+    "gemini-2.5-flash-lite-preview-09-2025": {
+      "name": "Gemini 2.5 Flash Lite Preview",
+      "description": "نسخه پیش‌نمایش سبک Gemini 2.5",
+      "input_cost": 0.00002,
+      "output_cost": 0.00008,
+      "context_window": 1000000
+    },
+    "deepseek-reasoner": {
+      "name": "DeepSeek Reasoner",
+      "description": "مدل استدلال پیشرفته DeepSeek",
+      "input_cost": 0.0005,
+      "output_cost": 0.002,
+      "context_window": 64000
+    },
+    "qwen3-30b-a3b-thinking-2507": {
+      "name": "Qwen3 30B Thinking",
+      "description": "مدل تفکر و استدلال Qwen با 30 میلیارد پارامتر",
+      "input_cost": 0.0008,
+      "output_cost": 0.0024,
+      "context_window": 128000
     }
   }
 }
