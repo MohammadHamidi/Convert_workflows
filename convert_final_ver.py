@@ -3,14 +3,41 @@ import json
 import requests
 import re
 import copy
-from typing import Dict, List, Any
+import unicodedata
+from typing import Dict, List, Any, Optional, Tuple
 import io
+from pathlib import Path
+
+# Import enhanced configuration and validation
+try:
+    from config_loader import ConfigLoader, N8NVersionDetector, WorkflowValidator
+    CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+    st.warning("⚠️ Configuration modules not found. Running in legacy mode.")
 
 class AvalAITranslator:
-    def __init__(self, api_key: str, model: str = "gpt-4o-mini"):
+    def __init__(self, api_key: str, model: str = "gpt-4o-mini", config: ConfigLoader = None):
         self.api_key = api_key
         self.model = model
-        self.base_url = "https://api.avalai.ir/v1"
+
+        # Use configuration if available, otherwise use defaults
+        if CONFIG_AVAILABLE and config:
+            self.config = config
+            api_config = config.get_api_config()
+            self.base_url = api_config.get('base_url', 'https://api.avalai.ir/v1')
+            self.endpoint = api_config.get('endpoint', '/chat/completions')
+            self.timeout = api_config.get('timeout', 30)
+            self.temperature = api_config.get('default_temperature', 0.3)
+            self.max_tokens = api_config.get('max_tokens', 2000)
+        else:
+            self.config = None
+            self.base_url = "https://api.avalai.ir/v1"
+            self.endpoint = "/chat/completions"
+            self.timeout = 30
+            self.temperature = 0.3
+            self.max_tokens = 2000
+
         self.headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"
@@ -134,15 +161,18 @@ class AvalAITranslator:
         }
     
     def translate_text(self, text: str, target_language: str = "فارسی") -> str:
-        """Translate text using AvalAI API"""
-        prompt = f"""Please translate the following text to {target_language} with high accuracy and natural flow. 
+        """Translate text using AvalAI API with dynamic configuration"""
+        if not text or not text.strip():
+            return text
+
+        prompt = f"""Please translate the following text to {target_language} with high accuracy and natural flow.
         Maintain the technical terminology appropriately and ensure the translation sounds professional and native.
-        
+
         Text to translate:
         {text}
-        
+
         Please provide only the translated text without any additional explanations."""
-        
+
         payload = {
             "model": self.model,
             "messages": [
@@ -151,53 +181,106 @@ class AvalAITranslator:
                     "content": prompt
                 }
             ],
-            "temperature": 0.3,
-            "max_tokens": 2000
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens
         }
-        
+
         try:
             response = requests.post(
-                f"{self.base_url}/chat/completions",
+                f"{self.base_url}{self.endpoint}",
                 headers=self.headers,
                 json=payload,
-                timeout=30
+                timeout=self.timeout
             )
             response.raise_for_status()
-            
+
             result = response.json()
             translated_text = result['choices'][0]['message']['content'].strip()
-            
+
             # Remove any quotes or extra formatting that might be added
             translated_text = re.sub(r'^["\']|["\']$', '', translated_text)
-            
+
             return translated_text
-            
+
+        except requests.exceptions.Timeout:
+            st.error(f"⏱️ Translation timeout after {self.timeout} seconds. Try a smaller text or increase timeout in config.")
+            return text
         except requests.exceptions.RequestException as e:
-            st.error(f"Translation API error: {str(e)}")
+            st.error(f"🌐 Translation API error: {str(e)}")
             return text  # Return original text if translation fails
+        except KeyError as e:
+            st.error(f"⚠️ Unexpected API response format: {str(e)}")
+            return text
         except Exception as e:
-            st.error(f"Translation error: {str(e)}")
+            st.error(f"❌ Translation error: {str(e)}")
             return text
 
 class N8NWorkflowProcessor:
-    def __init__(self, translator: AvalAITranslator = None):
+    def __init__(self, translator: AvalAITranslator = None, config: ConfigLoader = None):
         self.translator = translator
-    
+
+        # Initialize configuration and version detection
+        if CONFIG_AVAILABLE:
+            self.config = config or ConfigLoader()
+            self.version_detector = N8NVersionDetector(self.config)
+            self.validator = WorkflowValidator(self.config)
+            trans_config = self.config.get_translation_config()
+            self.rtl_threshold = trans_config.get('rtl_detection_threshold', 0.3)
+        else:
+            self.config = None
+            self.version_detector = None
+            self.validator = None
+            self.rtl_threshold = 0.3
+
     def detect_rtl_content(self, text: str) -> bool:
         """Detect if text contains RTL characters (Arabic, Persian, Hebrew)"""
-        import unicodedata
+        if not text:
+            return False
+
         rtl_chars = 0
         total_chars = len([c for c in text if c.isalpha()])
-        
+
         if total_chars == 0:
             return False
-        
+
         for char in text:
             if unicodedata.bidirectional(char) in ['R', 'AL']:
                 rtl_chars += 1
-        
-        # If more than 30% of alphabetic characters are RTL, consider it RTL content
-        return (rtl_chars / total_chars) > 0.3 if total_chars > 0 else False
+
+        # Use dynamic threshold from config
+        return (rtl_chars / total_chars) > self.rtl_threshold if total_chars > 0 else False
+
+    def is_sticky_note(self, node: Dict[str, Any]) -> bool:
+        """Check if node is a sticky note (supports multiple versions)"""
+        node_type = node.get('type', '')
+
+        if CONFIG_AVAILABLE and self.config:
+            sticky_note_types = self.config.get_sticky_note_types()
+            return node_type in sticky_note_types
+        else:
+            # Fallback to common types
+            return node_type in ['n8n-nodes-base.stickyNote', '@n8n/n8n-nodes-base.stickyNote']
+
+    def get_workflow_info(self, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Get comprehensive workflow information including version detection"""
+        if CONFIG_AVAILABLE and self.version_detector:
+            version = self.version_detector.detect_version(workflow_data)
+            is_supported = self.version_detector.is_version_supported(version)
+        else:
+            version = "unknown"
+            is_supported = True
+
+        nodes = workflow_data.get('nodes', [])
+        sticky_notes = [n for n in nodes if self.is_sticky_note(n)]
+
+        return {
+            'version': version,
+            'is_supported': is_supported,
+            'total_nodes': len(nodes),
+            'sticky_notes_count': len(sticky_notes),
+            'has_rtl_content': self.is_workflow_rtl(workflow_data),
+            'is_rtl_positioned': self.is_workflow_already_rtl_positioned(workflow_data)
+        }
     
     def is_workflow_rtl(self, workflow_data: Dict) -> bool:
         """Check if workflow appears to be already in RTL format"""
@@ -340,19 +423,20 @@ class N8NWorkflowProcessor:
         return updated_workflow
     
     def extract_sticky_notes(self, workflow_data: Dict) -> List[Dict]:
-        """Extract all sticky notes from N8N workflow"""
+        """Extract all sticky notes from N8N workflow (version-aware)"""
         sticky_notes = []
-        
+
         if 'nodes' in workflow_data:
             for i, node in enumerate(workflow_data['nodes']):
-                if node.get('type') == 'n8n-nodes-base.stickyNote':
+                if self.is_sticky_note(node):
                     sticky_notes.append({
                         'id': node.get('id'),
                         'name': node.get('name', f'Sticky Note {i+1}'),
                         'content': node.get('parameters', {}).get('content', ''),
-                        'node_index': i
+                        'node_index': i,
+                        'node_type': node.get('type')
                     })
-        
+
         return sticky_notes
     
     def translate_sticky_notes(self, sticky_notes: List[Dict], target_language: str) -> List[Dict]:
@@ -398,70 +482,93 @@ class N8NWorkflowProcessor:
         return updated_workflow
 
     def convert_ltr_to_rtl(self, workflow_json, canvas_width=None):
-        """Convert LTR workflow to RTL by mirroring node positions including sticky notes"""
+        """Convert LTR workflow to RTL by mirroring node positions (version-aware with validation)"""
         try:
             # Parse JSON if it's a string
             if isinstance(workflow_json, str):
                 workflow_data = json.loads(workflow_json)
             else:
                 workflow_data = workflow_json
-            
+
+            # Validate and auto-fix workflow if validator available
+            if CONFIG_AVAILABLE and self.validator:
+                is_valid, messages, fixed_workflow = self.validator.validate_and_fix(workflow_data)
+                if messages:
+                    for msg in messages:
+                        st.info(f"🔧 Auto-fix: {msg}")
+                workflow_data = fixed_workflow
+
             # Create a deep copy to avoid modifying original
             converted_workflow = copy.deepcopy(workflow_data)
-            
+
+            # Get layout configuration
+            if CONFIG_AVAILABLE and self.config:
+                layout_config = self.config.get_layout_config()
+                canvas_buffer = layout_config.get('canvas_width_buffer', 0.1)
+                default_sticky_width = layout_config.get('default_sticky_width', 300)
+            else:
+                canvas_buffer = 0.1
+                default_sticky_width = 300
+
             # Extract all X coordinates to determine canvas boundaries
             x_coordinates = []
             for node in converted_workflow.get('nodes', []):
                 if 'position' in node and len(node['position']) >= 2:
                     x_coordinates.append(node['position'][0])
-                    
+
                     # For sticky notes, also consider their width
-                    if node.get('type') == 'n8n-nodes-base.stickyNote':
-                        width = node.get('parameters', {}).get('width', 0)
+                    if self.is_sticky_note(node):
+                        width = node.get('parameters', {}).get('width', default_sticky_width)
                         if width:
                             x_coordinates.append(node['position'][0] + width)
-            
+
             if not x_coordinates:
+                st.warning("⚠️ No node positions found in workflow")
                 return converted_workflow
-            
+
             min_x = min(x_coordinates)
             max_x = max(x_coordinates)
-            
+
             # Calculate canvas width if not provided
             if canvas_width is None:
-                canvas_width = max_x + abs(max_x - min_x) * 0.1
-            
+                canvas_width = max_x + abs(max_x - min_x) * canvas_buffer
+
             # Mirror each node position
             regular_nodes = 0
             sticky_notes = 0
-            
+
             for node in converted_workflow.get('nodes', []):
                 if 'position' in node and len(node['position']) >= 2:
                     original_x, y = node['position'][0], node['position'][1]
-                    
+
                     # For sticky notes, account for their width when mirroring
-                    if node.get('type') == 'n8n-nodes-base.stickyNote':
+                    if self.is_sticky_note(node):
                         sticky_notes += 1
-                        width = node.get('parameters', {}).get('width', 0)
+                        width = node.get('parameters', {}).get('width', default_sticky_width)
                         new_x = canvas_width - original_x - width
                     else:
                         regular_nodes += 1
                         new_x = canvas_width - original_x
-                    
+
                     # Update the position
                     node['position'] = [new_x, y]
-            
+
             # Store conversion stats
             st.session_state['conversion_stats'] = {
                 'regular_nodes': regular_nodes,
                 'sticky_notes': sticky_notes,
                 'canvas_width': canvas_width
             }
-            
+
             return converted_workflow
-        
+
+        except json.JSONDecodeError as e:
+            st.error(f"❌ Invalid JSON format: {str(e)}")
+            return None
         except Exception as e:
-            st.error(f"Error converting workflow: {str(e)}")
+            st.error(f"❌ Error converting workflow: {str(e)}")
+            import traceback
+            st.error(f"Details: {traceback.format_exc()}")
             return None
 
 def validate_json(json_string):
@@ -1384,10 +1491,21 @@ def main():
         layout="wide",
         initial_sidebar_state="expanded"
     )
-    
+
     st.title("🔧 N8N Workflow Tools")
     st.markdown("*Complete toolkit for N8N workflow translation and RTL conversion*")
-    
+
+    # Show configuration status
+    if CONFIG_AVAILABLE:
+        try:
+            config = ConfigLoader()
+            supported_versions = config.get_supported_n8n_versions()
+            st.success(f"✅ Enhanced mode active | N8N versions: {', '.join(supported_versions)} | Dynamic configuration enabled")
+        except Exception as e:
+            st.warning(f"⚠️ Configuration loaded with warnings: {e}")
+    else:
+        st.info("ℹ️ Running in legacy mode - All features available with default configuration")
+
     # Create tabs
     tab1, tab2, tab3, tab4 = st.tabs([
         "🌐 Translation", 
@@ -1497,14 +1615,25 @@ def main():
         """)
         
         # Feature highlights
-        st.markdown("### ✨ New Features")
-        st.markdown("""
-        - **Smart Detection**: Automatically detects already translated/RTL content
-        - **Node Name Translation**: Persian node names for better readability
-        - **Complete Localization**: All-in-one Persian workflow conversion
-        - **Cost Optimization**: Real-time cost calculation
-        - **Enhanced Safety**: Prevents duplicate processing
-        """)
+        st.markdown("### ✨ Enhanced Features v2.0")
+        if CONFIG_AVAILABLE:
+            st.markdown("""
+            - **🔍 Version Detection**: Auto-detects N8N workflow version
+            - **🛠️ Dynamic Config**: Customizable settings via config.json
+            - **✅ Auto-validation**: Validates and fixes workflow structure
+            - **🌐 Multi-version Support**: Works with N8N 0.x and 1.x
+            - **🧠 Smart Detection**: Detects translated/RTL content
+            - **💰 Cost Optimization**: Real-time cost calculation
+            - **🔒 Enhanced Safety**: Prevents duplicate processing
+            """)
+        else:
+            st.markdown("""
+            - **Smart Detection**: Automatically detects already translated/RTL content
+            - **Node Name Translation**: Persian node names for better readability
+            - **Complete Localization**: All-in-one Persian workflow conversion
+            - **Cost Optimization**: Real-time cost calculation
+            - **Enhanced Safety**: Prevents duplicate processing
+            """)
         
         # Links
         st.markdown("### 🔗 Useful Links")
@@ -1516,17 +1645,24 @@ def main():
     
     # Footer
     st.markdown("---")
-    st.markdown(
-        """
+    footer_text = """
         <div style='text-align: center; color: #666; padding: 20px;'>
-            <p><strong>🚀 N8N Workflow Tools v2.0</strong></p>
+            <p><strong>🚀 N8N Workflow Tools v2.0 Enhanced</strong></p>
             <p>Built with ❤️ using Streamlit & AvalAI</p>
             <p>🌐 Translation • 🔄 RTL Conversion • 🏷️ Node Names • 🤖 AI Models • 💰 Cost Optimization</p>
+    """
+
+    if CONFIG_AVAILABLE:
+        footer_text += "<p>✨ <strong>Enhanced Features:</strong> Version Detection • Dynamic Configuration • Auto-validation • Multi-version Support</p>"
+    else:
+        footer_text += "<p>ℹ️ Legacy mode - Enhanced features disabled</p>"
+
+    footer_text += """
             <p><em>Complete solution for multilingual workflow localization</em></p>
         </div>
-        """,
-        unsafe_allow_html=True
-    )
+        """
+
+    st.markdown(footer_text, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
