@@ -21,7 +21,6 @@ class AvalAITranslator:
         self.api_key = api_key
         self.model = model
 
-        # Use configuration if available, otherwise use defaults
         if CONFIG_AVAILABLE and config:
             self.config = config
             api_config = config.get_api_config()
@@ -47,7 +46,6 @@ class AvalAITranslator:
     def get_available_models():
         """Get list of available AvalAI models with their specifications"""
         return {
-            # OpenAI Models - Based on your table
             "gpt-4.1-nano": {
                 "name": "GPT-4.1 Nano",
                 "provider": "OPENAI",
@@ -197,7 +195,6 @@ class AvalAITranslator:
             result = response.json()
             translated_text = result['choices'][0]['message']['content'].strip()
 
-            # Remove any quotes or extra formatting that might be added
             translated_text = re.sub(r'^["\']|["\']$', '', translated_text)
 
             return translated_text
@@ -207,7 +204,7 @@ class AvalAITranslator:
             return text
         except requests.exceptions.RequestException as e:
             st.error(f"🌐 Translation API error: {str(e)}")
-            return text  # Return original text if translation fails
+            return text
         except KeyError as e:
             st.error(f"⚠️ Unexpected API response format: {str(e)}")
             return text
@@ -219,7 +216,6 @@ class N8NWorkflowProcessor:
     def __init__(self, translator: AvalAITranslator = None, config: ConfigLoader = None):
         self.translator = translator
 
-        # Initialize configuration and version detection
         if CONFIG_AVAILABLE:
             self.config = config or ConfigLoader()
             self.version_detector = N8NVersionDetector(self.config)
@@ -247,7 +243,6 @@ class N8NWorkflowProcessor:
             if unicodedata.bidirectional(char) in ['R', 'AL']:
                 rtl_chars += 1
 
-        # Use dynamic threshold from config
         return (rtl_chars / total_chars) > self.rtl_threshold if total_chars > 0 else False
 
     def is_sticky_note(self, node: Dict[str, Any]) -> bool:
@@ -258,7 +253,6 @@ class N8NWorkflowProcessor:
             sticky_note_types = self.config.get_sticky_note_types()
             return node_type in sticky_note_types
         else:
-            # Fallback to common types
             return node_type in ['n8n-nodes-base.stickyNote', '@n8n/n8n-nodes-base.stickyNote']
 
     def get_workflow_info(self, workflow_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -285,14 +279,12 @@ class N8NWorkflowProcessor:
     def is_workflow_rtl(self, workflow_data: Dict) -> bool:
         """Check if workflow appears to be already in RTL format"""
         try:
-            # Check sticky notes for RTL content
             sticky_notes = self.extract_sticky_notes(workflow_data)
             if sticky_notes:
                 for note in sticky_notes:
                     if note['content'] and self.detect_rtl_content(note['content']):
                         return True
             
-            # Check node names for RTL content
             nodes = workflow_data.get('nodes', [])
             for node in nodes:
                 node_name = node.get('name', '')
@@ -307,9 +299,6 @@ class N8NWorkflowProcessor:
         """Check if workflow appears to be already translated to target language"""
         if target_language == "فارسی":
             return self.is_workflow_rtl(workflow_data)
-        
-        # For other languages, check for typical patterns
-        # This is a basic implementation - could be enhanced
         return False
     
     def is_workflow_already_rtl_positioned(self, workflow_data: Dict) -> bool:
@@ -319,7 +308,6 @@ class N8NWorkflowProcessor:
             if len(nodes) < 2:
                 return False
             
-            # Get positions and check if they follow RTL pattern
             positions = []
             for node in nodes:
                 if 'position' in node and len(node['position']) >= 2:
@@ -328,9 +316,6 @@ class N8NWorkflowProcessor:
             if len(positions) < 2:
                 return False
             
-            # Simple heuristic: if most nodes are positioned in decreasing X order
-            # (considering connection flow), it might be RTL
-            # This is a basic check - could be enhanced with connection analysis
             sorted_positions = sorted(positions, reverse=True)
             return positions == sorted_positions[:len(positions)]
             
@@ -364,15 +349,6 @@ class N8NWorkflowProcessor:
             if node_info['original_name'].strip():
                 st.write(f"🔄 Translating node {i+1}/{len(node_names)}: {node_info['original_name']}")
                 
-                # Create a more specific prompt for node names
-                prompt = f"""Please translate the following N8N workflow node name to {target_language}. 
-                Keep it concise, professional, and suitable for a technical workflow context.
-                
-                Node name to translate: {node_info['original_name']}
-                Node type: {node_info['node_type']}
-                
-                Provide only the translated name without explanations."""
-                
                 translated_name = self.translator.translate_text(
                     node_info['original_name'],
                     target_language
@@ -394,26 +370,21 @@ class N8NWorkflowProcessor:
         """Replace original node names with translated ones in the workflow"""
         updated_workflow = copy.deepcopy(workflow_data)
         
-        # Create a mapping of old names to new names
         name_mapping = {}
         for translated_name in translated_names:
             name_mapping[translated_name['original_name']] = translated_name['translated_name']
         
-        # Update node names
         for translated_name in translated_names:
             node_index = translated_name['node_index']
             if node_index < len(updated_workflow['nodes']):
                 updated_workflow['nodes'][node_index]['name'] = translated_name['translated_name']
         
-        # Update references to node names in sticky notes
         sticky_notes = self.extract_sticky_notes(updated_workflow)
         for note in sticky_notes:
             content = note['content']
             for old_name, new_name in name_mapping.items():
-                # Replace node name references in content
                 content = content.replace(old_name, new_name)
             
-            # Update the sticky note content
             node_index = note['node_index']
             if node_index < len(updated_workflow['nodes']):
                 if 'parameters' not in updated_workflow['nodes'][node_index]:
@@ -482,23 +453,47 @@ class N8NWorkflowProcessor:
         return updated_workflow
 
     def convert_ltr_to_rtl(self, workflow_json, canvas_width=None):
-        """Convert LTR workflow to RTL by mirroring node positions (version-aware with validation)"""
+        """Convert LTR workflow to RTL by mirroring node positions (version-aware with validation) - FIXED"""
         try:
-            # Parse JSON if it's a string
             if isinstance(workflow_json, str):
                 workflow_data = json.loads(workflow_json)
             else:
                 workflow_data = workflow_json
 
-            # Validate and auto-fix workflow if validator available
+            # Validate and auto-fix workflow if validator available - FIXED ERROR HANDLING
             if CONFIG_AVAILABLE and self.validator:
-                is_valid, messages, fixed_workflow = self.validator.validate_and_fix(workflow_data)
-                if messages:
-                    for msg in messages:
-                        st.info(f"🔧 Auto-fix: {msg}")
-                workflow_data = fixed_workflow
+                try:
+                    validation_result = self.validator.validate_and_fix(workflow_data)
+                    
+                    # Handle different return value formats
+                    if isinstance(validation_result, tuple):
+                        if len(validation_result) == 3:
+                            is_valid, messages, fixed_workflow = validation_result
+                        elif len(validation_result) == 2:
+                            # Could be (is_valid, workflow) or (messages, workflow)
+                            if isinstance(validation_result[0], bool):
+                                is_valid, fixed_workflow = validation_result
+                                messages = []
+                            else:
+                                messages, fixed_workflow = validation_result
+                                is_valid = True
+                        else:
+                            st.warning(f"⚠️ Unexpected validation format, using original workflow")
+                            fixed_workflow = workflow_data
+                            messages = []
+                    else:
+                        # Single return value
+                        fixed_workflow = validation_result
+                        messages = []
+                    
+                    if messages:
+                        for msg in messages:
+                            st.info(f"🔧 Auto-fix: {msg}")
+                    workflow_data = fixed_workflow
+                    
+                except Exception as e:
+                    st.warning(f"⚠️ Validation skipped: {e}")
 
-            # Create a deep copy to avoid modifying original
             converted_workflow = copy.deepcopy(workflow_data)
 
             # Get layout configuration
@@ -510,13 +505,12 @@ class N8NWorkflowProcessor:
                 canvas_buffer = 0.1
                 default_sticky_width = 300
 
-            # Extract all X coordinates to determine canvas boundaries
+            # Extract X coordinates
             x_coordinates = []
             for node in converted_workflow.get('nodes', []):
                 if 'position' in node and len(node['position']) >= 2:
                     x_coordinates.append(node['position'][0])
 
-                    # For sticky notes, also consider their width
                     if self.is_sticky_note(node):
                         width = node.get('parameters', {}).get('width', default_sticky_width)
                         if width:
@@ -529,11 +523,10 @@ class N8NWorkflowProcessor:
             min_x = min(x_coordinates)
             max_x = max(x_coordinates)
 
-            # Calculate canvas width if not provided
             if canvas_width is None:
                 canvas_width = max_x + abs(max_x - min_x) * canvas_buffer
 
-            # Mirror each node position
+            # Mirror positions
             regular_nodes = 0
             sticky_notes = 0
 
@@ -541,7 +534,6 @@ class N8NWorkflowProcessor:
                 if 'position' in node and len(node['position']) >= 2:
                     original_x, y = node['position'][0], node['position'][1]
 
-                    # For sticky notes, account for their width when mirroring
                     if self.is_sticky_note(node):
                         sticky_notes += 1
                         width = node.get('parameters', {}).get('width', default_sticky_width)
@@ -550,10 +542,8 @@ class N8NWorkflowProcessor:
                         regular_nodes += 1
                         new_x = canvas_width - original_x
 
-                    # Update the position
                     node['position'] = [new_x, y]
 
-            # Store conversion stats
             st.session_state['conversion_stats'] = {
                 'regular_nodes': regular_nodes,
                 'sticky_notes': sticky_notes,
@@ -587,7 +577,7 @@ def calculate_estimated_cost(text_length: int, model_key: str) -> float:
     if not model_info:
         return 0.0
     
-    estimated_tokens = text_length / 4  # Rough estimate: 4 chars = 1 token
+    estimated_tokens = text_length / 4
     cost = (estimated_tokens / 1_000_000) * model_info['input_cost']
     
     return cost
@@ -596,7 +586,6 @@ def create_model_selector(key_prefix: str, default_model: str = "gpt-4o-mini"):
     """Create a model selector widget"""
     models = AvalAITranslator.get_available_models()
     
-    # Create model options
     model_options = []
     model_keys = []
     
@@ -607,7 +596,6 @@ def create_model_selector(key_prefix: str, default_model: str = "gpt-4o-mini"):
         model_options.append(label)
         model_keys.append(key)
     
-    # Find default index
     default_index = 0
     try:
         default_index = model_keys.index(default_model)
@@ -632,13 +620,11 @@ def translator_tab():
     st.header("🌐 Workflow Translation")
     st.markdown("*Translate N8N workflow sticky notes using AvalAI*")
     
-    # Configuration section
     col_config, col_main = st.columns([1, 2])
     
     with col_config:
         st.subheader("⚙️ Configuration")
         
-        # API Key
         api_key = st.text_input(
             "AvalAI API Key",
             type="password",
@@ -646,7 +632,6 @@ def translator_tab():
             key="translation_api_key"
         )
         
-        # Language selection
         target_language = st.selectbox(
             "Target Language",
             ["فارسی", "English", "العربية", "Español", "Français", "Deutsch"],
@@ -654,11 +639,9 @@ def translator_tab():
             key="translation_language"
         )
         
-        # Model selection
         st.markdown("### 🤖 Model Selection")
         selected_model_key, selected_model_info = create_model_selector("translation")
         
-        # Display model info
         with st.expander("📊 Model Details", expanded=False):
             st.markdown(f"**{selected_model_info['description']}**")
             
@@ -671,7 +654,6 @@ def translator_tab():
                 st.metric("Output Cost", f"${selected_model_info['output_cost']}/1M")
                 st.metric("Max Tokens", f"{selected_model_info['max_tokens']:,}")
         
-        # Quick recommendations
         st.markdown("### 💡 Quick Select")
         models = AvalAITranslator.get_available_models()
         
@@ -714,7 +696,6 @@ def translator_tab():
             key="translation_input"
         )
         
-        # Check if workflow is already translated
         if workflow_input.strip():
             try:
                 workflow_data = json.loads(workflow_input)
@@ -726,7 +707,6 @@ def translator_tab():
             except:
                 pass
         
-        # Action buttons
         col_analyze, col_translate = st.columns(2)
         
         with col_analyze:
@@ -737,7 +717,6 @@ def translator_tab():
                         processor = N8NWorkflowProcessor()
                         sticky_notes = processor.extract_sticky_notes(workflow_data)
                         
-                        # Check if already translated
                         if processor.is_workflow_translated(workflow_data, target_language):
                             st.warning("⚠️ This workflow appears to already be translated!")
                             return
@@ -745,14 +724,12 @@ def translator_tab():
                         st.success(f"✅ Found {len(sticky_notes)} sticky notes")
                         
                         if sticky_notes:
-                            # Calculate cost estimation
                             total_chars = sum(len(note['content']) for note in sticky_notes)
                             estimated_cost = calculate_estimated_cost(total_chars, selected_model_key)
                             
                             st.info(f"💰 Estimated cost: ${estimated_cost:.4f}")
                             st.info(f"📊 Total characters: {total_chars:,}")
                             
-                            # Show sticky notes
                             st.subheader("📝 Found Sticky Notes:")
                             for i, note in enumerate(sticky_notes, 1):
                                 with st.expander(f"Note {i}: {note['name'][:40]}..."):
@@ -784,26 +761,21 @@ def translator_tab():
                     return
                 
                 try:
-                    # Parse workflow
                     workflow_data = json.loads(workflow_input)
                     
-                    # Initialize components
                     translator = AvalAITranslator(api_key, selected_model_key)
                     processor = N8NWorkflowProcessor(translator)
                     
-                    # Check if already translated
                     if processor.is_workflow_translated(workflow_data, target_language):
                         st.warning("⚠️ This workflow appears to already be translated!")
                         return
                     
-                    # Extract sticky notes
                     sticky_notes = processor.extract_sticky_notes(workflow_data)
                     
                     if not sticky_notes:
                         st.warning("⚠️ No sticky notes found to translate")
                         return
                     
-                    # Show processing info
                     total_chars = sum(len(note['content']) for note in sticky_notes)
                     estimated_cost = calculate_estimated_cost(total_chars, selected_model_key)
                     
@@ -811,31 +783,26 @@ def translator_tab():
                     st.info(f"🌐 Target: {target_language}")
                     st.info(f"💰 Estimated cost: ${estimated_cost:.4f}")
                     
-                    # Progress tracking
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     
-                    # Translate notes
                     status_text.text("🔄 Translating sticky notes...")
                     with st.container():
                         translated_notes = processor.translate_sticky_notes(sticky_notes, target_language)
                     progress_bar.progress(0.7)
                     
-                    # Replace in workflow
                     status_text.text("🔧 Updating workflow...")
                     updated_workflow = processor.replace_notes_in_workflow(workflow_data, translated_notes)
                     progress_bar.progress(1.0)
                     
                     status_text.text("✅ Translation completed!")
                     
-                    # Store result
                     json_str = json.dumps(updated_workflow, ensure_ascii=False, indent=2)
                     st.session_state['translated_workflow'] = json_str
                     st.session_state['translation_model_used'] = selected_model_info['name']
                     
                     st.success(f"🎉 Successfully translated {len(translated_notes)} sticky notes!")
                     
-                    # Preview results
                     st.subheader("🔍 Translation Preview:")
                     for i, note in enumerate(translated_notes[:3], 1):
                         with st.expander(f"Translated Note {i}: {note['name']}"):
@@ -850,7 +817,6 @@ def translator_tab():
                 except Exception as e:
                     st.error(f"❌ Translation error: {str(e)}")
         
-        # Download section
         if 'translated_workflow' in st.session_state:
             st.subheader("📥 Download Results")
             
@@ -876,7 +842,6 @@ def converter_tab():
     st.header("🔄 LTR → RTL Converter")
     st.markdown("*Convert your N8N workflows from Left-to-Right to Right-to-Left orientation*")
     
-    # Create two columns for input and output
     col1, col2 = st.columns(2)
     
     with col1:
@@ -889,7 +854,6 @@ def converter_tab():
             key="ltr_input"
         )
         
-        # Check if workflow is already RTL
         if ltr_json.strip():
             try:
                 workflow_data = json.loads(ltr_json)
@@ -901,7 +865,6 @@ def converter_tab():
             except:
                 pass
         
-        # Advanced options
         with st.expander("⚙️ Advanced Options"):
             canvas_width = st.number_input(
                 "Canvas Width (0 = auto-calculate)",
@@ -926,7 +889,6 @@ def converter_tab():
                         workflow_data = json.loads(ltr_json)
                         processor = N8NWorkflowProcessor()
                         
-                        # Check if already RTL
                         if processor.is_workflow_already_rtl_positioned(workflow_data):
                             st.warning("⚠️ This workflow appears to already be in RTL layout!")
                             return
@@ -948,7 +910,6 @@ def converter_tab():
             else:
                 st.warning("⚠️ Please paste your LTR workflow JSON first!")
         
-        # Display result
         if 'rtl_result' in st.session_state:
             st.text_area(
                 "Converted RTL workflow JSON:",
@@ -965,7 +926,6 @@ def converter_tab():
                 key="download_rtl"
             )
     
-    # Position preview
     if ('rtl_result' in st.session_state and 
         ltr_json.strip() and 
         show_preview):
@@ -980,7 +940,7 @@ def converter_tab():
             
             with col_ltr:
                 st.markdown("**LTR Positions:**")
-                for node in ltr_data.get('nodes', [])[:10]:  # Show first 10
+                for node in ltr_data.get('nodes', [])[:10]:
                     if 'position' in node:
                         name = node.get('name', 'Unknown')[:20]
                         pos = node['position']
@@ -989,7 +949,7 @@ def converter_tab():
             
             with col_rtl:
                 st.markdown("**RTL Positions:**")
-                for node in rtl_data.get('nodes', [])[:10]:  # Show first 10
+                for node in rtl_data.get('nodes', [])[:10]:
                     if 'position' in node:
                         name = node.get('name', 'Unknown')[:20]
                         pos = node['position']
@@ -1004,13 +964,11 @@ def node_renamer_tab():
     st.header("🏷️ Node Name Translation")
     st.markdown("*Translate N8N workflow node names to Persian for better readability*")
     
-    # Configuration section
     col_config, col_main = st.columns([1, 2])
     
     with col_config:
         st.subheader("⚙️ Configuration")
         
-        # API Key
         api_key = st.text_input(
             "AvalAI API Key",
             type="password",
@@ -1018,11 +976,9 @@ def node_renamer_tab():
             key="node_renamer_api_key"
         )
         
-        # Model selection
         st.markdown("### 🤖 Model Selection")
         selected_model_key, selected_model_info = create_model_selector("node_renamer")
         
-        # Display model info
         with st.expander("📊 Model Details", expanded=False):
             st.markdown(f"**{selected_model_info['description']}**")
             
@@ -1061,7 +1017,6 @@ def node_renamer_tab():
             key="node_renamer_input"
         )
         
-        # Action buttons
         col_analyze, col_translate = st.columns(2)
         
         with col_analyze:
@@ -1075,14 +1030,12 @@ def node_renamer_tab():
                         st.success(f"✅ Found {len(node_names)} node names to translate")
                         
                         if node_names:
-                            # Calculate cost estimation
                             total_chars = sum(len(node['original_name']) for node in node_names)
                             estimated_cost = calculate_estimated_cost(total_chars, selected_model_key)
                             
                             st.info(f"💰 Estimated cost: ${estimated_cost:.4f}")
                             st.info(f"📊 Total characters: {total_chars:,}")
                             
-                            # Show node names
                             st.subheader("🔧 Node Names to Translate:")
                             for i, node in enumerate(node_names, 1):
                                 with st.expander(f"Node {i}: {node['original_name']}"):
@@ -1109,21 +1062,17 @@ def node_renamer_tab():
                     return
                 
                 try:
-                    # Parse workflow
                     workflow_data = json.loads(workflow_input)
                     
-                    # Initialize components
                     translator = AvalAITranslator(api_key, selected_model_key)
                     processor = N8NWorkflowProcessor(translator)
                     
-                    # Extract node names
                     node_names = processor.extract_node_names(workflow_data)
                     
                     if not node_names:
                         st.warning("⚠️ No translatable node names found")
                         return
                     
-                    # Show processing info
                     total_chars = sum(len(node['original_name']) for node in node_names)
                     estimated_cost = calculate_estimated_cost(total_chars, selected_model_key)
                     
@@ -1131,31 +1080,26 @@ def node_renamer_tab():
                     st.info(f"🏷️ Translating: {len(node_names)} node names")
                     st.info(f"💰 Estimated cost: ${estimated_cost:.4f}")
                     
-                    # Progress tracking
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     
-                    # Translate node names
                     status_text.text("🔄 Translating node names...")
                     with st.container():
                         translated_node_names = processor.translate_node_names(node_names, "فارسی")
                     progress_bar.progress(0.7)
                     
-                    # Replace in workflow
                     status_text.text("🔧 Updating workflow...")
                     updated_workflow = processor.replace_node_names_in_workflow(workflow_data, translated_node_names)
                     progress_bar.progress(1.0)
                     
                     status_text.text("✅ Translation completed!")
                     
-                    # Store result
                     json_str = json.dumps(updated_workflow, ensure_ascii=False, indent=2)
                     st.session_state['translated_nodes_workflow'] = json_str
                     st.session_state['node_translation_model_used'] = selected_model_info['name']
                     
                     st.success(f"🎉 Successfully translated {len(translated_node_names)} node names!")
                     
-                    # Preview results
                     st.subheader("🔍 Translation Preview:")
                     for i, node in enumerate(translated_node_names[:5], 1):
                         with st.expander(f"Translated Node {i}"):
@@ -1170,7 +1114,6 @@ def node_renamer_tab():
                 except Exception as e:
                     st.error(f"❌ Translation error: {str(e)}")
         
-        # Download section
         if 'translated_nodes_workflow' in st.session_state:
             st.subheader("📥 Download Results")
             
@@ -1196,7 +1139,6 @@ def combined_tab():
     st.header("🔄🌐🏷️ Complete Workflow Localization")
     st.markdown("*Full Persian localization: Translate notes + Convert to RTL + Rename nodes*")
     
-    # Configuration
     with st.expander("⚙️ Configuration", expanded=True):
         col_config1, col_config2, col_config3 = st.columns(3)
         
@@ -1251,7 +1193,6 @@ def combined_tab():
             st.info(f"🤖 {selected_model_info['name']}")
             st.info(f"💰 ${selected_model_info['input_cost']}/{selected_model_info['output_cost']}")
     
-    # Input section
     st.subheader("📥 Input Workflow")
     workflow_input = st.text_area(
         "Paste your N8N workflow JSON here:",
@@ -1260,7 +1201,6 @@ def combined_tab():
         key="combined_input"
     )
     
-    # Check workflow status
     if workflow_input.strip():
         try:
             workflow_data = json.loads(workflow_input)
@@ -1289,7 +1229,6 @@ def combined_tab():
         except:
             st.error("❌ Invalid JSON format")
     
-    # Process section
     col_process, col_info = st.columns([2, 1])
     
     with col_process:
@@ -1307,10 +1246,8 @@ def combined_tab():
                 return
             
             try:
-                # Parse workflow
                 workflow_data = json.loads(workflow_input)
                 
-                # Initialize components
                 translator = AvalAITranslator(api_key, selected_model_key)
                 processor = N8NWorkflowProcessor(translator)
                 
@@ -1318,7 +1255,6 @@ def combined_tab():
                 total_steps = sum([translate_notes, translate_node_names, convert_to_rtl])
                 current_step = 0
                 
-                # Step 1: Translate Sticky Notes
                 if translate_notes:
                     current_step += 1
                     st.subheader(f"🌐 Step {current_step}/{total_steps}: Translating Sticky Notes")
@@ -1344,7 +1280,6 @@ def combined_tab():
                     else:
                         st.info("ℹ️ No sticky notes found, skipping translation")
                 
-                # Step 2: Translate Node Names
                 if translate_node_names:
                     current_step += 1
                     st.subheader(f"🏷️ Step {current_step}/{total_steps}: Translating Node Names")
@@ -1370,7 +1305,6 @@ def combined_tab():
                     else:
                         st.info("ℹ️ No translatable node names found, skipping")
                 
-                # Step 3: RTL Conversion
                 if convert_to_rtl:
                     current_step += 1
                     st.subheader(f"🔄 Step {current_step}/{total_steps}: Converting to RTL Layout")
@@ -1385,14 +1319,12 @@ def combined_tab():
                             current_workflow = final_workflow
                             progress_bar = st.progress(1.0)
                             
-                            # Show final stats
                             stats = st.session_state.get('conversion_stats', {})
                             st.success(f"✅ Converted {stats.get('regular_nodes', 0)} nodes + {stats.get('sticky_notes', 0)} sticky notes to RTL")
                         else:
                             st.error("❌ RTL conversion failed!")
                             return
                 
-                # Store final result
                 json_str = json.dumps(current_workflow, indent=2, ensure_ascii=False)
                 st.session_state['combined_result'] = json_str
                 st.session_state['combined_model_used'] = selected_model_info['name']
@@ -1422,7 +1354,6 @@ def combined_tab():
                 st.metric("Sticky Notes", len(sticky_notes))
                 st.metric("Node Names", len(node_names))
                 
-                # Show cost estimate for selected operations
                 total_cost = 0
                 if translate_notes and sticky_notes:
                     notes_chars = sum(len(note['content']) for note in sticky_notes)
@@ -1438,14 +1369,12 @@ def combined_tab():
             except:
                 st.metric("Status", "Invalid JSON")
     
-    # Results section
     if 'combined_result' in st.session_state:
         st.subheader("📥 Download Results")
         
         col_download, col_preview = st.columns([1, 1])
         
         with col_download:
-            # Create descriptive filename
             steps_completed = [step for step in st.session_state.get('combined_steps_completed', []) if step]
             filename_parts = []
             if "🌐 Sticky Notes" in str(steps_completed):
@@ -1470,7 +1399,6 @@ def combined_tab():
             if 'combined_model_used' in st.session_state:
                 st.info(f"🤖 Model: {st.session_state['combined_model_used']}")
             
-            # Show completed steps
             if 'combined_steps_completed' in st.session_state:
                 completed_steps = [step for step in st.session_state['combined_steps_completed'] if step]
                 if completed_steps:
@@ -1495,7 +1423,6 @@ def main():
     st.title("🔧 N8N Workflow Tools")
     st.markdown("*Complete toolkit for N8N workflow translation and RTL conversion*")
 
-    # Show configuration status
     if CONFIG_AVAILABLE:
         try:
             config = ConfigLoader()
@@ -1506,7 +1433,6 @@ def main():
     else:
         st.info("ℹ️ Running in legacy mode - All features available with default configuration")
 
-    # Create tabs
     tab1, tab2, tab3, tab4 = st.tabs([
         "🌐 Translation", 
         "🔄 LTR → RTL", 
@@ -1526,15 +1452,12 @@ def main():
     with tab4:
         combined_tab()
     
-    # Sidebar
     with st.sidebar:
         st.header("📖 Guide & Tools")
         
-        # Model comparison
         st.markdown("### 🤖 Model Comparison")
         models = AvalAITranslator.get_available_models()
         
-        # Show top 5 most cost-effective models
         sorted_models = sorted(models.items(), key=lambda x: x[1]['input_cost'])
         
         for model_key, model_info in sorted_models[:5]:
@@ -1542,7 +1465,6 @@ def main():
             st.markdown(f"💰 ${model_info['input_cost']}/{model_info['output_cost']} | {model_info['description']}")
             st.markdown("---")
         
-        # Cost calculator
         st.markdown("### 💰 Cost Calculator")
         
         calc_chars = st.number_input(
@@ -1556,14 +1478,13 @@ def main():
             "Model for calculation:",
             options=list(models.keys()),
             format_func=lambda x: models[x]['name'],
-            index=1  # Default to gpt-4o-mini
+            index=1
         )
         
         if calc_chars > 0:
             calc_cost = calculate_estimated_cost(calc_chars, calc_model)
             st.metric("Estimated Cost", f"${calc_cost:.4f}")
         
-        # Instructions
         st.markdown("### 📋 Instructions")
         
         with st.expander("🌐 Sticky Notes Translation", expanded=False):
@@ -1603,7 +1524,6 @@ def main():
             5. Download fully localized workflow
             """)
         
-        # Tips
         st.markdown("### 💡 Pro Tips")
         st.markdown("""
         - **gpt-4.1-nano**: Ultra cheap for basic translations
@@ -1614,7 +1534,6 @@ def main():
         - Use complete localization for Persian workflows
         """)
         
-        # Feature highlights
         st.markdown("### ✨ Enhanced Features v2.0")
         if CONFIG_AVAILABLE:
             st.markdown("""
@@ -1635,7 +1554,6 @@ def main():
             - **Enhanced Safety**: Prevents duplicate processing
             """)
         
-        # Links
         st.markdown("### 🔗 Useful Links")
         st.markdown("""
         - [AvalAI Dashboard](https://avalai.ir) - Get API key
@@ -1643,7 +1561,6 @@ def main():
         - [GitHub Issues](https://github.com) - Report bugs
         """)
     
-    # Footer
     st.markdown("---")
     footer_text = """
         <div style='text-align: center; color: #666; padding: 20px;'>
