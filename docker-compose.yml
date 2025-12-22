@@ -1,0 +1,23 @@
+services:
+  n8n-converter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: n8n-workflow-converter
+    ports:
+      - "${PORT:-8789}:8000"
+    environment:
+      - AVALAI_API_KEY=${AVALAI_API_KEY:-}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Mount config file if you want to modify it without rebuilding
+      - ./config.json:/app/config.json:ro
+      # Optional: mount static files for development (uncomment for hot-reload)
+      # - ./static:/app/static:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8789/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
